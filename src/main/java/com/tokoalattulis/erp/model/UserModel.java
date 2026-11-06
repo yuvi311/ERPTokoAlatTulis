@@ -1,32 +1,28 @@
 package com.tokoalattulis.erp.model;
 
-import com.tokoalattulis.erp.util.DatabaseConnection;
-import java.sql.*;
+import com.tokoalattulis.erp.util.HibernateUtil;
 
 public class UserModel {
     public boolean validasiLogin(String username, String password) {
-        String sql = "SELECT 1 FROM users WHERE username=? AND password=?";
-        try (Connection c = DatabaseConnection.getConnection();
-             PreparedStatement q = c.prepareStatement(sql)) {
-            q.setString(1, username);
-            q.setString(2, password);
-            try (ResultSet r = q.executeQuery()) {
-                return r.next();
-            }
-        } catch (SQLException e) {
+        try {
+            return HibernateUtil.read(s -> s.createQuery(
+                    "select count(u) from User u where u.username = :u and u.password = :p", Long.class)
+                .setParameter("u", username)
+                .setParameter("p", password)
+                .uniqueResult() > 0);
+        } catch (RuntimeException e) {
             return false;
         }
     }
 
     public int getUserId(String username) {
-        String sql = "SELECT id FROM users WHERE username=?";
-        try (Connection c = DatabaseConnection.getConnection();
-             PreparedStatement p = c.prepareStatement(sql)) {
-            p.setString(1, username);
-            try (ResultSet r = p.executeQuery()) {
-                return r.next() ? r.getInt(1) : 1;
-            }
-        } catch (SQLException e) {
+        try {
+            Integer id = HibernateUtil.read(s -> s.createQuery(
+                    "select u.id from User u where u.username = :u", Integer.class)
+                .setParameter("u", username)
+                .uniqueResult());
+            return id != null ? id : 1;
+        } catch (RuntimeException e) {
             return 1;
         }
     }

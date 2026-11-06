@@ -386,11 +386,11 @@ public class MenuUtamaController {
 
         try {
             ringkas.add(new JLabel("Jumlah jenis barang"));
-            ringkas.add(new JLabel(String.valueOf(transaksiModel.getScalarCount("SELECT COUNT(*) FROM barang"))));
+            ringkas.add(new JLabel(String.valueOf(barangModel.hitungJenisBarang())));
             ringkas.add(new JLabel("Total unit persediaan"));
-            ringkas.add(new JLabel(String.valueOf(transaksiModel.getScalarCount("SELECT COALESCE(SUM(stok),0) FROM barang"))));
+            ringkas.add(new JLabel(String.valueOf(barangModel.totalUnitPersediaan())));
             ringkas.add(new JLabel("Total omzet penjualan"));
-            ringkas.add(new JLabel(rupiah.format(transaksiModel.getScalarCount("SELECT COALESCE(SUM(total),0) FROM transaksi"))));
+            ringkas.add(new JLabel(rupiah.format(transaksiModel.totalOmzet())));
         } catch (Exception ex) {
             view.showError(ex.getMessage());
         }

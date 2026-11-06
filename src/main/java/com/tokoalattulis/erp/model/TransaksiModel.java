@@ -1,8 +1,6 @@
 package com.tokoalattulis.erp.model;
 
-import com.tokoalattulis.erp.util.DatabaseConnection;
-import java.sql.*;
-import java.util.ArrayList;
+import com.tokoalattulis.erp.util.HibernateUtil;
 import java.util.List;
 
 public class TransaksiModel {
@@ -15,97 +13,46 @@ public class TransaksiModel {
         public int subtotal() { return harga * qty; }
     }
 
-    public long simpanTransaksi(List<CartItem> cart, int userId) throws Exception {
+    public long simpanTransaksi(List<CartItem> cart, int userId) {
         long totalSum = cart.stream().mapToLong(CartItem::subtotal).sum();
-        try (Connection c = DatabaseConnection.getConnection()) {
-            c.setAutoCommit(false);
-            try {
-                long id;
-                String sqlTx = "INSERT INTO transaksi(total,user_id) VALUES(?,?)";
-                try (PreparedStatement p = c.prepareStatement(sqlTx, Statement.RETURN_GENERATED_KEYS)) {
-                    p.setLong(1, totalSum);
-                    p.setInt(2, userId);
-                    p.executeUpdate();
-                    try (ResultSet r = p.getGeneratedKeys()) {
-                        if (!r.next()) throw new SQLException("ID transaksi tidak terbentuk.");
-                        id = r.getLong(1);
-                    }
-                }
-                for (CartItem it : cart) {
-                    String sqlBarang = "UPDATE barang SET stok=stok-? WHERE kode=? AND stok>=?";
-                    try (PreparedStatement p = c.prepareStatement(sqlBarang)) {
-                        p.setInt(1, it.qty);
-                        p.setString(2, it.kode);
-                        p.setInt(3, it.qty);
-                        if (p.executeUpdate() != 1) {
-                            throw new SQLException("Stok barang " + it.nama + " tidak mencukupi.");
-                        }
-                    }
-                    String sqlDetail = "INSERT INTO detail_transaksi(id_transaksi,kode_barang,jumlah,harga_satuan,subtotal) VALUES(?,?,?,?,?)";
-                    try (PreparedStatement p = c.prepareStatement(sqlDetail)) {
-                        p.setLong(1, id);
-                        p.setString(2, it.kode);
-                        p.setInt(3, it.qty);
-                        p.setInt(4, it.harga);
-                        p.setInt(5, it.subtotal());
-                        p.executeUpdate();
-                    }
-                }
-                c.commit();
-                return id;
-            } catch (Exception ex) {
-                c.rollback();
-                throw ex;
+        return HibernateUtil.tx(s -> {
+            Transaksi t = new Transaksi();
+            t.setTotal(totalSum);
+            t.setUser(s.getReference(User.class, userId));
+            for (CartItem it : cart) {
+                // Pengurangan stok atomik: gagal bila stok tidak cukup.
+                int ok = s.createMutationQuery(
+                        "update Barang set stok = stok - :q where kode = :k and stok >= :q")
+                    .setParameter("q", it.qty)
+                    .setParameter("k", it.kode)
+                    .executeUpdate();
+                if (ok != 1) throw new IllegalStateException("Stok barang " + it.nama + " tidak mencukupi.");
+                t.addDetail(new DetailTransaksi(s.getReference(Barang.class, it.kode), it.qty, it.harga));
             }
-        }
+            s.persist(t); // detail ikut tersimpan (cascade)
+            return (long) t.getId();
+        });
     }
 
-    public List<Object[]> getRiwayatTransaksi() throws SQLException {
-        List<Object[]> list = new ArrayList<>();
-        String sql = "SELECT tr.id,tr.tanggal,tr.total,COALESCE(u.username,'-') " +
-                     "FROM transaksi tr LEFT JOIN users u ON u.id=tr.user_id ORDER BY tr.id DESC";
-        try (Connection c = DatabaseConnection.getConnection();
-             Statement s = c.createStatement();
-             ResultSet r = s.executeQuery(sql)) {
-            while (r.next()) {
-                list.add(new Object[]{
-                    r.getInt(1),
-                    r.getString(2),
-                    r.getLong(3),
-                    r.getString(4)
-                });
-            }
-        }
-        return list;
+    /** Kolom: id (Integer), tanggal, total (Long), username kasir. */
+    public List<Object[]> getRiwayatTransaksi() {
+        return HibernateUtil.read(s -> s.createQuery(
+                "select t.id, t.tanggal, t.total, coalesce(u.username,'-') " +
+                "from Transaksi t left join t.user u order by t.id desc", Object[].class)
+            .list());
     }
 
-    public List<Object[]> getDetailTransaksi(int idTransaksi) throws SQLException {
-        List<Object[]> list = new ArrayList<>();
-        String sql = "SELECT dt.kode_barang,b.nama,dt.harga_satuan,dt.jumlah,dt.subtotal " +
-                     "FROM detail_transaksi dt JOIN barang b ON b.kode=dt.kode_barang WHERE dt.id_transaksi=?";
-        try (Connection c = DatabaseConnection.getConnection();
-             PreparedStatement p = c.prepareStatement(sql)) {
-            p.setInt(1, idTransaksi);
-            try (ResultSet r = p.executeQuery()) {
-                while (r.next()) {
-                    list.add(new Object[]{
-                        r.getString(1),
-                        r.getString(2),
-                        r.getLong(3),
-                        r.getInt(4),
-                        r.getLong(5)
-                    });
-                }
-            }
-        }
-        return list;
+    /** Kolom: kode, nama, harga satuan (Long), jumlah, subtotal (Long). */
+    public List<Object[]> getDetailTransaksi(int idTransaksi) {
+        return HibernateUtil.read(s -> s.createQuery(
+                "select b.kode, b.nama, d.hargaSatuan, d.jumlah, d.subtotal " +
+                "from DetailTransaksi d join d.barang b where d.transaksi.id = :id", Object[].class)
+            .setParameter("id", idTransaksi)
+            .list());
     }
 
-    public long getScalarCount(String sql) throws SQLException {
-        try (Connection c = DatabaseConnection.getConnection();
-             Statement s = c.createStatement();
-             ResultSet r = s.executeQuery(sql)) {
-            return r.next() ? r.getLong(1) : 0;
-        }
+    public long totalOmzet() {
+        return HibernateUtil.read(s -> s.createQuery(
+                "select coalesce(sum(t.total),0) from Transaksi t", Long.class).uniqueResult());
     }
 }
